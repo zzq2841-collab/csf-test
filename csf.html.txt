@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Clinical Contrast Sensitivity Function (CSF) Test</title>
+    <style>
+        :root {
+            --primary: #2196F3;
+            --success: #4CAF50;
+            --danger: #f44336;
+            --bg: #f5f7fa;
+            --text: #333;
+        }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 15px; background-color: var(--bg); color: var(--text); }
+        .container { max-width: 600px; margin: 0 auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.1); }
+        h2 { text-align: center; margin-top: 0; color: var(--primary); }
+        
+        /* Pre-test Form Styles */
+        .form-group { margin-bottom: 15px; }
+        label { display: block; font-weight: bold; margin-bottom: 5px; }
+        select, input[type="range"] { width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #ccc; font-size: 16px; box-sizing: border-box; }
+        
+        /* Calibration Styles */
+        .calibration-box { background: #e9ecef; padding: 15px; border-radius: 8px; text-align: center; margin-bottom: 20px;}
+        #card-preview { background: #2c3e50; color: white; height: 54px; margin: 10px auto; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 12px; transition: width 0.1s; }
+        
+        /* Test Area Styles */
+        #test-area, #results-area { display: none; text-align: center; }
+        canvas { background-color: #808080; border-radius: 8px; margin: 20px auto; display: block; max-width: 100%; box-shadow: 0 4px 12px rgba(0,0,0,0.15);}
+        .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 20px; }
+        button { padding: 16px; font-size: 16px; font-weight: bold; border: none; border-radius: 8px; color: white; cursor: pointer; touch-action: manipulation; transition: opacity 0.2s; }
+        button:active { opacity: 0.7; }
+        .btn-primary { background-color: var(--primary); grid-column: span 2; }
+        .btn-up { background-color: var(--success); }
+        .btn-down { background-color: var(--danger); }
+        
+        .instructions { font-size: 15px; line-height: 1.5; padding: 15px; background: #e3f2fd; border-left: 4px solid var(--primary); border-radius: 4px; text-align: left; margin-bottom: 15px;}
+    </style>
+</head>
+<body>
+
+<div class="container" id="setup-area">
+    <h2>Pre-Test Setup & Calibration</h2>
+    
+    <div class="form-group">
+        <label for="age-group">Age Group:</label>
+        <select id="age-group">
+            <option value="18-30">18 - 30 Years (Peak Sens.)</option>
+            <option value="31-45">31 - 45 Years</option>
+            <option value="46-60">46 - 60 Years</option>
+            <option value="60+">60+ Years (Reduced High Freq.)</option>
+        </select>
+    </div>
+
+    <div class="form-group">
+        <label for="health-status">Ocular Health Status:</label>
+        <select id="health-status">
+            <option value="healthy">Healthy / No Known Issues</option>
+            <option value="cataract">Cataract</option>
+            <option value="glaucoma">Glaucoma</option>
+            <option value="other">Other Pathology</option>
+        </select>
+    </div>
+
+    <div class="form-group">
+        <label for="correction">Are you wearing your best optical correction (glasses/contacts)?</label>
+        <select id="correction">
+            <option value="yes">Yes</option>
+            <option value="no">No</option>
+        </select>
+    </div>
+
+    <div class="calibration-box">
+        <label>Screen Calibration</label>
+        <p style="font-size: 13px; color: #555;">To ensure accurate clinical results, the system needs to calculate your screen's pixel density. Hold a standard credit card against the screen and adjust the slider until the box is exactly the same physical width as your card.</p>
+        <input type="range" id="card-slider" min="100" max="600" value="300" oninput="updateCardSize()">
+        <div id="card-preview" style="width: 300px;">Credit Card Width (85.6mm)</div>
+    </div>
+
+    <button class="btn-primary" onclick="startTest()">Start Experiment</button>
+</div>
+
+<div class="container" id="test-area">
+    <div class="instructions">
+        <strong>Task:</strong> Maintain exactly <strong>50 cm</strong> viewing distance.<br>
+        Use the buttons to adjust contrast until the Gabor patch (stripes) is <i>just barely visible</i>.
+    </div>
+
+    <!-- Canvas size fixed to 400x400 for better rendering of Gabor patches -->
+    <canvas id="stimulusCanvas" width="400" height="400"></canvas>
+
+    <div class="controls">
+        <button class="btn-up" onclick="adjustContrast(1)">⬆️ More Contrast</button>
+        <button class="btn-down" onclick="adjustContrast(-1)">⬇️ Less Contrast</button>
+        <button class="btn-primary" onclick="confirmThreshold()">✅ Confirm Threshold</button>
+    </div>
+</div>
+
+<div class="container" id="results-area">
+    <h2>Your CSF Results</h2>
+    <div class="instructions" id="result-summary">
+        Comparing your log contrast sensitivity against the expected normative distribution for your age group.
+    </div>
+    <canvas id="chartCanvas" width="500" height="400" style="max-width: 100%; height: auto;"></canvas>
+    <br>
+    <button class="btn-primary" onclick="location.reload()" style="width: 100%; margin-top: 20px;">Restart Test</button>
+</div>
+
+<script>
+    // System Variables
+    let ageGroup = "18-30";
+    let pixelsPerMM = 0;
+    let pixelsPerDegree = 0;
+    const viewingDistanceMM = 500; // 50 cm
+    
+    // Test Variables: Frequencies in Cycles Per Degree (CPD)
+    const targetCPDs = [1.5, 3, 6, 12, 18]; 
+    let currentIdx = 0;
+    let currentContrast = 0.3; 
+    let results = [];
+
+    // Canvas Contexts
+    const stimCanvas = document.getElementById('stimulusCanvas');
+    const stimCtx = stimCanvas.getContext('2d');
+    const chartCanvas = document.getElementById('chartCanvas');
+    const chartCtx = chartCanvas.getContext('2d');
+
+    // Expected Normal Data (Log Sensitivity [mean, lower_bound, upper_bound]) mapping to targetCPDs
+    const normativeData = {
+        "18-30": [[1.8, 1.5, 2.1], [2.1, 1.8, 2.4], [2.2, 1.9, 2.5], [1.7, 1.4, 2.0], [1.2, 0.9, 1.5]],
+        "31-45": [[1.7, 1.4, 2.0], [2.0, 1.7, 2.3], [2.1, 1.8, 2.4], [1.5, 1.2, 1.8], [1.0, 0.7, 1.3]],
+        "46-60": [[1.6, 1.3, 1.9], [1.9, 1.6, 2.2], [1.8, 1.5, 2.1], [1.2, 0.9, 1.5], [0.7, 0.4, 1.0]],
+        "60+":   [[1.5, 1.2, 1.8], [1.7, 1.4, 2.0], [1.5, 1.2, 1.8], [0.9, 0.6, 1.2], [0.4, 0.1, 0.7]]
+    };
+
+    function updateCardSize() {
+        const sliderVal = document.getElementById('card-slider').value;
+        document.getElementById('card-preview').style.width = sliderVal + 'px';
+    }
+
+    function startTest() {
+        // Gather Demographics
+        ageGroup = document.getElementById('age-group').value;
+        const widthPixels = parseInt(document.getElementById('card-slider').value);
+        
+        // Calibration Math
+        // Standard credit card width is 85.6 mm
+        pixelsPerMM = widthPixels / 85.6; 
+        
+        // Calculate Pixels per Degree of Visual Angle at 500mm
+        // Tan(1 degree) = opposite / adjacent -> opposite = 500 * tan(1 deg)
+        const mmPerDegree = viewingDistanceMM * Math.tan(1 * Math.PI / 180);
+        pixelsPerDegree = mmPerDegree * pixelsPerMM;
+
+        // Switch UI
+        document.getElementById('setup-area').style.display = 'none';
+        document.getElementById('test-area').style.display = 'block';
+        
+        drawGabor();
+    }
+
+    function drawGabor() {
+        if (currentIdx >= targetCPDs.length) return;
+        
+        const cpd = targetCPDs[currentIdx];
+        
+        // Convert Cycles Per Degree to Cycles Per Pixel
+        const cyclesPerPixel = cpd / pixelsPerDegree;
+        
+        const width = stimCanvas.width;
+        const height = stimCanvas.height;
+        const imageData = stimCtx.createImageData(width, height);
+        const data = imageData.data;
+        
+        // Gaussian envelope standard deviation (in pixels)
+        // Adjust sigma based on frequency so the patch always contains a similar number of visible cycles
+        const sigma = pixelsPerDegree * (1.5 / cpd) + 20; 
+
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                // Center coordinates
+                const dx = x - width / 2;
+                const dy = y - height / 2;
+                
+                const r2 = dx*dx + dy*dy;
+                const envelope = Math.exp(-r2 / (2 * sigma * sigma));
+                const grating = Math.sin(dx * cyclesPerPixel * 2 * Math.PI);
+                
+                const luminance = grating * envelope * currentContrast;
+                const color = Math.floor((0.5 + 0.5 * luminance) * 255);
+                
+                const index = (y * width + x) * 4;
+                data[index] = color;
+                data[index+1] = color;
+                data[index+2] = color;
+                data[index+3] = 255;
+            }
+        }
+        stimCtx.putImageData(imageData, 0, 0);
+    }
+
+    function adjustContrast(direction) {
+        // Logarithmic adjustment multiplier for precision near threshold
+        const multiplier = 1.15; 
+        if (direction > 0) {
+            currentContrast = Math.min(1.0, currentContrast * multiplier);
+        } else {
+            currentContrast = Math.max(0.001, currentContrast / multiplier);
+        }
+        drawGabor();
+    }
+
+    function confirmThreshold() {
+        const sensitivity = 1 / currentContrast;
+        results.push({
+            cpd: targetCPDs[currentIdx], 
+            logSens: Math.log10(sensitivity)
+        });
+        
+        currentIdx++;
+        
+        if (currentIdx < targetCPDs.length) {
+            currentContrast = 0.3; // Reset contrast for the next spatial frequency
+            drawGabor();
+        } else {
+            showResults();
+        }
+    }
+
+    function showResults() {
+        document.getElementById('test-area').style.display = 'none';
+        document.getElementById('results-area').style.display = 'block';
+        
+        // Setup Chart
+        chartCtx.fillStyle = "#ffffff";
+        chartCtx.fillRect(0, 0, chartCanvas.width, chartCanvas.height);
+        
+        const padding = 50;
+        const gWidth = chartCanvas.width - (padding * 2);
+        const gHeight = chartCanvas.height - (padding * 2);
+        
+        // Mapping functions
+        const minX = Math.log2(1.5);
+        const maxX = Math.log2(18);
+        const mapX = (cpd) => padding + ((Math.log2(cpd) - minX) / (maxX - minX)) * gWidth;
+        const mapY = (val) => chartCanvas.height - padding - (val / 3.0) * gHeight;
+
+        // 1. Draw Shaded Normal Area
+        chartCtx.fillStyle = "rgba(173, 216, 230, 0.4)"; // Light Blue Shading
+        chartCtx.beginPath();
+        const norms = normativeData[ageGroup];
+        
+        // Upper bound path
+        norms.forEach((n, i) => {
+            const x = mapX(targetCPDs[i]);
+            const y = mapY(n[2]);
+            if (i === 0) chartCtx.moveTo(x, y); else chartCtx.lineTo(x, y);
+        });
+        // Lower bound path (reverse)
+        for (let i = norms.length - 1; i >= 0; i--) {
+            chartCtx.lineTo(mapX(targetCPDs[i]), mapY(norms[i][1]));
+        }
+        chartCtx.closePath();
+        chartCtx.fill();
+
+        // Normal Mean Line (Dashed)
+        chartCtx.strokeStyle = "rgba(100, 149, 237, 0.8)";
+        chartCtx.lineWidth = 2;
+        chartCtx.setLineDash([5, 5]);
+        chartCtx.beginPath();
+        norms.forEach((n, i) => {
+            const x = mapX(targetCPDs[i]);
+            const y = mapY(n[0]);
+            if (i === 0) chartCtx.moveTo(x, y); else chartCtx.lineTo(x, y);
+        });
+        chartCtx.stroke();
+        chartCtx.setLineDash([]); // Reset dash
+
+        // 2. Draw Axes and Grid
+        chartCtx.strokeStyle = "#333";
+        chartCtx.lineWidth = 2;
+        chartCtx.beginPath();
+        chartCtx.moveTo(padding, padding);
+        chartCtx.lineTo(padding, chartCanvas.height - padding);
+        chartCtx.lineTo(chartCanvas.width - padding, chartCanvas.height - padding);
+        chartCtx.stroke();
+
+        // Axis Labels
+        chartCtx.fillStyle = "#333";
+        chartCtx.font = "14px sans-serif";
+        chartCtx.textAlign = "center";
+        chartCtx.fillText("Spatial Frequency (Cycles Per Degree)", chartCanvas.width / 2, chartCanvas.height - 15);
+        
+        chartCtx.save();
+        chartCtx.translate(15, chartCanvas.height / 2);
+        chartCtx.rotate(-Math.PI / 2);
+        chartCtx.fillText("Log Sensitivity", 0, 0);
+        chartCtx.restore();
+
+        // X-Ticks
+        targetCPDs.forEach(cpd => {
+            const x = mapX(cpd);
+            chartCtx.fillStyle = "#666";
+            chartCtx.fillText(cpd, x, chartCanvas.height - padding + 20);
+        });
+
+        // Y-Ticks (0 to 3)
+        chartCtx.textAlign = "right";
+        chartCtx.textBaseline = "middle";
+        [0, 1, 2, 3].forEach(val => {
+            const y = mapY(val);
+            chartCtx.fillStyle = "#666";
+            chartCtx.fillText(val, padding - 10, y);
+        });
+
+        // 3. Plot User Data
+        chartCtx.strokeStyle = "#d32f2f";
+        chartCtx.lineWidth = 3;
+        chartCtx.beginPath();
+        results.forEach((r, i) => {
+            const x = mapX(r.cpd);
+            const y = mapY(r.logSens);
+            if (i === 0) chartCtx.moveTo(x, y); else chartCtx.lineTo(x, y);
+        });
+        chartCtx.stroke();
+
+        chartCtx.fillStyle = "#d32f2f";
+        results.forEach(r => {
+            const x = mapX(r.cpd);
+            const y = mapY(r.logSens);
+            chartCtx.beginPath();
+            chartCtx.arc(x, y, 6, 0, Math.PI * 2);
+            chartCtx.fill();
+        });
+
+        // Legend
+        chartCtx.font = "12px sans-serif";
+        chartCtx.textAlign = "left";
+        chartCtx.fillStyle = "rgba(173, 216, 230, 0.8)";
+        chartCtx.fillRect(padding + 20, padding, 15, 15);
+        chartCtx.fillStyle = "#333";
+        chartCtx.fillText("Expected Normal Area", padding + 45, padding + 12);
+        
+        chartCtx.fillStyle = "#d32f2f";
+        chartCtx.beginPath(); chartCtx.arc(padding + 27, padding + 35, 5, 0, Math.PI*2); chartCtx.fill();
+        chartCtx.fillStyle = "#333";
+        chartCtx.fillText("Your Results", padding + 45, padding + 38);
+    }
+</script>
+
+</body>
+</html>
